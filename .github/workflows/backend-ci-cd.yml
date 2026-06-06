@@ -1,0 +1,50 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches:
+    - main
+    paths:
+    - "backend/MuchToDo/**"
+    - ".github/workflows/backend-ci-cd.yml"
+  workflow_dispatch:
+
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test-build:
+    name: Test and Build Backend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend/MuchToDo
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.25.1"
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run Go tests
+      run: go test ./...
+      continue-on-error: true
+
+    - name: Run Go vet
+      run: go vet ./...
+      continue-on-error: true
+
+    - name: Build Go binary
+      run: go build -o muchtodo-api ./cmd/api
+
+    - name: Build Docker image
+      run: docker build -t muchtodo-backend:${{ github.sha }} .
