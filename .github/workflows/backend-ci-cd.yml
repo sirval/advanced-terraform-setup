@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  test-build:
-    name: Test and Build Backend
+  test-build-deploy:
+    name: Test, Build and Deploy Backend
     runs-on: ubuntu-latest
 
     defaults:
@@ -46,5 +46,43 @@ jobs:
     - name: Build Go binary
       run: go build -o muchtodo-api ./cmd/api
 
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Login to ECR
+      run: |
+        aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+        docker login --username AWS --password-stdin ${{ secrets.ECR_REPOSITORY_URL }}
+
     - name: Build Docker image
-      run: docker build -t muchtodo-backend:${{ github.sha }} .
+      run: |
+        docker build -t ${{ secrets.ECR_REPOSITORY_URL }}:${{ github.sha }} .
+        docker tag ${{ secrets.ECR_REPOSITORY_URL }}:${{ github.sha }} ${{ secrets.ECR_REPOSITORY_URL }}:latest
+
+    - name: Scan Docker image with Trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ secrets.ECR_REPOSITORY_URL }}:${{ github.sha }}
+        format: table
+        exit-code: 0
+        severity: CRITICAL,HIGH
+
+    - name: Push Docker image to ECR
+      run: |
+        docker push ${{ secrets.ECR_REPOSITORY_URL }}:${{ github.sha }}
+        docker push ${{ secrets.ECR_REPOSITORY_URL }}:latest
+
+    - name: Trigger ASG instance refresh
+      run: |
+        aws autoscaling start-instance-refresh \
+          --auto-scaling-group-name ${{ secrets.ASG_NAME }} \
+          --strategy Rolling \
+          --preferences MinHealthyPercentage=50,InstanceWarmup=120
+
+    - name: Smoke test backend through ALB
+      run: |
+        sleep 180
+        curl -f http://${{ secrets.ALB_DNS_NAME }}/health
